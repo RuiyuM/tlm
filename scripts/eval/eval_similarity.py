@@ -1,4 +1,5 @@
 import json
+import sys
 from cal_bert_score import calculate_bert_score
 from cal_bleurt_score import calculate_bleurt_score
 import numpy as np
@@ -91,10 +92,12 @@ def calculate_bleu_score(datas):
 
 if __name__ == '__main__':
 
-    
-    datas_paths = [
-        # 'path to your generated_predictions.jsonl',
-    ]
+    datas_paths = sys.argv[1:]
+    if len(datas_paths) == 0:
+        raise ValueError(
+            "Please pass at least one path to generated_predictions.jsonl, "
+            "e.g. `python scripts/eval/eval_similarity.py /path/to/generated_predictions.jsonl`"
+        )
 
     results = []
     for datas_path in datas_paths:

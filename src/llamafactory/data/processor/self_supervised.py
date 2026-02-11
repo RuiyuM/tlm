@@ -19,26 +19,24 @@ from ...extras import logging
 from ..data_utils import Role
 from .processor_utils import DatasetProcessor, infer_seqlen
 
-
 if TYPE_CHECKING:
     from ..mm_plugin import AudioInput, ImageInput, VideoInput
-
 
 logger = logging.get_logger(__name__)
 
 
 class SelfSupervisedDatasetProcessor(DatasetProcessor):
     def _encode_data_example(
-        self,
-        prompt: list[dict[str, str]],
-        response: list[dict[str, str]],
-        system: Optional[str],
-        tools: Optional[str],
-        images: list["ImageInput"],
-        videos: list["VideoInput"],
-        audios: list["AudioInput"],
+            self,
+            prompt: list[dict[str, str]],
+            response: list[dict[str, str]],
+            system: Optional[str],
+            tools: Optional[str],
+            images: list["ImageInput"],
+            videos: list["VideoInput"],
+            audios: list["AudioInput"],
     ) -> tuple[list[int], list[int]]:
-    
+
         if len(response) == 1:
             messages = prompt + response
         else:
@@ -49,7 +47,8 @@ class SelfSupervisedDatasetProcessor(DatasetProcessor):
         if self.template.efficient_eos:
             labels += [self.tokenizer.eos_token_id]
 
-        input_ids, _ = self.template.mm_plugin.process_token_ids(input_ids, None, images, audios, videos, self.tokenizer, self.processor)
+        input_ids, _ = self.template.mm_plugin.process_token_ids(input_ids, None, images, audios, videos,
+                                                                 self.tokenizer, self.processor)
         source_len, target_len = infer_seqlen(len(input_ids), len(labels), self.data_args.cutoff_len)
         input_ids = input_ids[:source_len]
         labels = labels[:target_len]
@@ -76,7 +75,7 @@ class SelfSupervisedDatasetProcessor(DatasetProcessor):
             )
             model_inputs["input_ids"].append(input_ids)
             model_inputs["attention_mask"].append([1] * len(input_ids))
-            model_inputs["labels"].append(input_ids) #Note：label = input_ids
+            model_inputs["labels"].append(input_ids)  # Note：label = input_ids
             model_inputs["images"].append(examples["_images"][i])
             model_inputs["videos"].append(examples["_videos"][i])
             model_inputs["audios"].append(examples["_audios"][i])

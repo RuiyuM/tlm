@@ -1,5 +1,7 @@
 # #计算bleurt指标，值越大越好
 
+import os
+
 from bleurt import score
 from tqdm import tqdm
 def calculate_bleurt_score(candidate, reference):
@@ -10,7 +12,12 @@ def calculate_bleurt_score(candidate, reference):
     :return:输出bleurt得分，[0,1]，得分越大越好
     """
     results = []
-    checkpoint = "/hujinwu/LLM_Assemble/pretrain_model/bleurt/bleurt-base-128"
+    checkpoint = os.getenv("BLEURT_CHECKPOINT", "checkpoints/bleurt/BLEURT-20-D12")
+    if not os.path.exists(checkpoint):
+        raise FileNotFoundError(
+            f"BLEURT checkpoint not found: {checkpoint}. "
+            "Set env BLEURT_CHECKPOINT to your local BLEURT checkpoint path."
+        )
     # references = [reference]
     # candidates = [candidate]
     scorer = score.BleurtScorer(checkpoint)

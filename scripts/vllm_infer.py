@@ -5,14 +5,10 @@ import os
 import fire
 from transformers import Seq2SeqTrainingArguments
 
-import sys
-sys.path.append('/hujinwu/wyf/projects/zhangzitian/projects/LLaMA-Factory/src')
-print(sys.path)
-
 import numpy as np
 np.random.seed(42)
 
-from llamafactory.data import get_dataset, get_template_and_fix_tokenizer, _get_merged_dataset
+from llamafactory.data import get_dataset, get_template_and_fix_tokenizer
 from llamafactory.extras.constants import IGNORE_INDEX
 from llamafactory.extras.misc import check_version, get_device_count
 from llamafactory.extras.packages import is_vllm_available
@@ -50,6 +46,9 @@ def vllm_infer(
     Performs batch generation using vLLM engine, which supports tensor parallelism.
     Usage: python vllm_infer.py --model_name_or_path meta-llama/Llama-2-7b-hf --template llama --dataset alpaca_en_demo
     """
+    if not is_vllm_available():
+        raise ImportError("vllm is not available. Please install vllm>=0.4.3,<=0.6.5 first.")
+
     check_version("vllm>=0.4.3,<=0.6.5")
     if pipeline_parallel_size > get_device_count():
         raise ValueError("Pipeline parallel size should be smaller than the number of gpus.")

@@ -1,4 +1,6 @@
 #计算answer和标准output之间的bertscore
+import os
+
 import bert_score
 import numpy as np
 import torch
@@ -64,7 +66,17 @@ def calculate_bert_score(candidates, references):
             candidates[i] = candidate[:min_len]
             references[i] = reference[:min_len]
 
-    P, R, F1 = bert_score.score(candidates, references, lang="en", verbose=True, model_type="bert-base-multilingual-cased", device='cuda:0', batch_size=16)
+    device = os.getenv("BERTSCORE_DEVICE", "cuda:0" if torch.cuda.is_available() else "cpu")
+    batch_size = int(os.getenv("BERTSCORE_BATCH_SIZE", "16"))
+    P, R, F1 = bert_score.score(
+        candidates,
+        references,
+        lang="en",
+        verbose=True,
+        model_type="bert-base-multilingual-cased",
+        device=device,
+        batch_size=batch_size,
+    )
     # print(np.array(F1)[0])
     return F1.numpy().tolist()
 
