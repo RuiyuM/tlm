@@ -1,0 +1,71 @@
+### model
+model_name_or_path: /data/rxm210041/huggingface/Llama-3.2-3B-Instruct
+
+### method
+stage: ttl
+setting: offline_ttl
+ttl_backend: diffusion
+do_train: true
+do_predict: false
+finetuning_type: lora
+lora_target: q_proj,v_proj
+trust_remote_code: true
+
+### diffusion TTL parameters
+lad_checkpoint: /data/rxm210041/huggingface/Ruurd_tini_model/diffusion-model-3B.pth
+lad_repo: third_party/lad-code
+merge_lad_lora: true
+
+threshold: 3.0
+lamb: 0.1
+diffusion_use_weighting: true
+
+prompt_dppl_num_masks: 4
+prompt_dppl_train_num_masks: 4
+prompt_dppl_mask_ratio_min: 0.0
+prompt_dppl_mask_ratio_max: 0.5
+prompt_dppl_full_mask_prob: 0.1
+prompt_dppl_top_percent: 0.1
+
+diffusion_max_it: 16
+diffusion_noise_start: 0.5
+diffusion_noising_sharpness: 5.0
+diffusion_max_length: 256
+diffusion_model_parallel: true
+
+### dataset
+dataset: geosignal_5k
+eval_dataset: geosignal_5k
+dataset_dir: data
+cutoff_len: 4096
+max_samples: 5000
+
+### output
+output_dir: saves/lad-ttl/offline_ttl/geosignal_5k/top10-weighted-m4-lr_5e-5-seed_42
+overwrite_output_dir: true
+plot_loss: false
+logging_steps: 20
+
+### train
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 1
+learning_rate: 5.0e-5
+num_train_epochs: 1.0
+max_steps: -1
+max_grad_norm: 1.0
+gradient_checkpointing: true
+bf16: false
+fp16: false
+
+### eval
+do_eval: false
+
+### predict (used by diffusion decoder wrapper)
+do_sample: false
+temperature: 0.0
+top_p: 1.0
+top_k: 50
+max_new_tokens: 256
+predict_with_generate: false
+
+report_to: none

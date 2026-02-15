@@ -328,9 +328,75 @@ class FinetuningArguments(FreezeArguments, LoraArguments, RLHFArguments, GaloreA
         metadata={"help": "the setting to choose"}
     )
 
+    ttl_backend: Literal["ar", "diffusion"] = field(
+        default="ar",
+        metadata={"help": "Backend for TTL workflow: default AR trainer or LAD diffusion pipeline."},
+    )
+
     streaming_batch_size: int = field(
         default=100,
         metadata={"help": "The assumed batch size for streaming data when using the online_ttl setting."},
+    )
+
+    lad_checkpoint: Optional[str] = field(
+        default=None,
+        metadata={"help": "Path to LAD checkpoint (.pth) used by diffusion TTL backend."},
+    )
+    lad_repo: str = field(
+        default="third_party/lad-code",
+        metadata={"help": "Path to LAD repository used by diffusion TTL backend."},
+    )
+    merge_lad_lora: bool = field(
+        default=True,
+        metadata={"help": "Whether to merge LAD LoRA into backbone before attaching TTL LoRA."},
+    )
+    prompt_dppl_num_masks: int = field(
+        default=4,
+        metadata={"help": "Number of random masks for prompt DPPL scoring (offline selection)."},
+    )
+    prompt_dppl_train_num_masks: int = field(
+        default=1,
+        metadata={"help": "Number of random masks for prompt DPPL during TTL optimization."},
+    )
+    prompt_dppl_mask_ratio_min: float = field(
+        default=0.0,
+        metadata={"help": "Minimum masking ratio for prompt DPPL sampling."},
+    )
+    prompt_dppl_mask_ratio_max: float = field(
+        default=0.5,
+        metadata={"help": "Maximum masking ratio for prompt DPPL sampling."},
+    )
+    prompt_dppl_full_mask_prob: float = field(
+        default=0.1,
+        metadata={"help": "Probability of full masking in prompt DPPL sampling."},
+    )
+    prompt_dppl_top_percent: float = field(
+        default=0.0,
+        metadata={"help": "If >0, select top p fraction by prompt ell instead of fixed threshold."},
+    )
+    diffusion_use_weighting: bool = field(
+        default=False,
+        metadata={"help": "Apply TLM-style exp weighting after hard filtering in diffusion TTL."},
+    )
+    diffusion_max_it: int = field(
+        default=16,
+        metadata={"help": "Diffusion denoising iterations for prediction in diffusion TTL backend."},
+    )
+    diffusion_noise_start: float = field(
+        default=0.5,
+        metadata={"help": "Initial remask strength for diffusion prediction."},
+    )
+    diffusion_noising_sharpness: float = field(
+        default=5.0,
+        metadata={"help": "Noising schedule sharpness for diffusion prediction."},
+    )
+    diffusion_max_length: int = field(
+        default=0,
+        metadata={"help": "Prompt max length for diffusion backend. <=0 means use cutoff_len."},
+    )
+    diffusion_model_parallel: bool = field(
+        default=False,
+        metadata={"help": "Shard LAD backbone across all visible GPUs in single-process mode."},
     )
 
 
@@ -338,7 +404,7 @@ class FinetuningArguments(FreezeArguments, LoraArguments, RLHFArguments, GaloreA
         default=False,
         metadata={"help": "Whether or not to train model in purely bf16 precision (without AMP)."},
     )
-    stage: Literal["pt", "sft", "rm", "ppo", "dpo", "kto"] = field(
+    stage: Literal["pt", "sft", "ttl", "rm", "ppo", "dpo", "kto"] = field(
         default="sft",
         metadata={"help": "Which stage will be performed in training."},
     )
@@ -396,6 +462,24 @@ class FinetuningArguments(FreezeArguments, LoraArguments, RLHFArguments, GaloreA
 
         if self.stage == "ppo" and self.reward_model is None:
             raise ValueError("`reward_model` is necessary for PPO training.")
+
+        if self.ttl_backend == "diffusion":
+            if self.lad_checkpoint is None:
+                raise ValueError("`lad_checkpoint` is required when `ttl_backend` is `diffusion`.")
+            if self.setting != "offline_ttl":
+                raise ValueError("Diffusion TTL backend currently supports `offline_ttl` only.")
+
+        if self.prompt_dppl_num_masks <= 0 or self.prompt_dppl_train_num_masks <= 0:
+            raise ValueError("Prompt DPPL mask counts must be positive.")
+
+        if not (0.0 <= self.prompt_dppl_full_mask_prob <= 1.0):
+            raise ValueError("`prompt_dppl_full_mask_prob` must be in [0, 1].")
+
+        if self.prompt_dppl_top_percent < 0.0 or self.prompt_dppl_top_percent > 1.0:
+            raise ValueError("`prompt_dppl_top_percent` must be in [0, 1].")
+
+        if self.diffusion_max_it <= 0:
+            raise ValueError("`diffusion_max_it` must be positive.")
 
         if self.stage == "ppo" and self.reward_model_type == "lora" and self.finetuning_type != "lora":
             raise ValueError("`reward_model_type` cannot be lora for Freeze/Full PPO training.")

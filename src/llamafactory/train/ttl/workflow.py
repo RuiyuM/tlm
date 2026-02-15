@@ -9,6 +9,7 @@ from ...model import load_model, load_tokenizer
 from ..trainer_utils import create_modelcard_and_push
 from .metric import ComputeAccuracy, ComputeSimilarity, eval_logit_processor
 from .trainer import CustomSeq2SeqTrainer
+from .diffusion_workflow import run_ttl_diffusion
 
 if TYPE_CHECKING:
     from transformers import Seq2SeqTrainingArguments, TrainerCallback
@@ -173,6 +174,17 @@ def run_ttl(
     generating_args: "GeneratingArguments",
     callbacks: Optional[List["TrainerCallback"]] = None,
 ):
+    if finetuning_args.ttl_backend == "diffusion":
+        run_ttl_diffusion(
+            model_args=model_args,
+            data_args=data_args,
+            training_args=training_args,
+            finetuning_args=finetuning_args,
+            generating_args=generating_args,
+            callbacks=callbacks,
+        )
+        return
+
     tokenizer_module = load_tokenizer(model_args)
     tokenizer = tokenizer_module["tokenizer"]
     template = get_template_and_fix_tokenizer(tokenizer, data_args)
