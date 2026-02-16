@@ -34,6 +34,8 @@ class PromptRecord:
     label: str
     prompt_ids: List[int]
     answer_start: int
+    question_start: int
+    question_end: int
     mask_token_id: int
     score_ell: Optional[float] = None
 
@@ -131,7 +133,7 @@ def _load_prompt_records(
             if not question:
                 continue
             label = _build_label(row, columns)
-            prompt_ids, answer_start, mask_token_id = _prepare_prompt_tokens(
+            prompt_ids, answer_start, question_start, question_end, mask_token_id = _prepare_prompt_tokens(
                 tokenizer=tokenizer,
                 question=question,
                 max_length=max_length,
@@ -142,6 +144,8 @@ def _load_prompt_records(
                     label=label,
                     prompt_ids=prompt_ids,
                     answer_start=answer_start,
+                    question_start=question_start,
+                    question_end=question_end,
                     mask_token_id=mask_token_id,
                 )
             )
@@ -220,24 +224,137 @@ def _prepare_prompt_tokens(
     tokenizer,
     question: str,
     max_length: int,
-) -> Tuple[List[int], int, int]:
+) -> Tuple[List[int], int, int, int, int]:
     prompt = _build_lad_prompt(question)
     input_ids = tokenizer.encode(prompt, add_special_tokens=False)
-    marker_ids = tokenizer.encode("<|start_header_id|>assistant<|end_header_id|>\n", add_special_tokens=False)
-    marker_pos = _find_subsequence(input_ids, marker_ids)
+    assistant_marker_ids = tokenizer.encode("<|start_header_id|>assistant<|end_header_id|>\n", add_special_tokens=False)
+    marker_pos = _find_subsequence(input_ids, assistant_marker_ids)
     if marker_pos is None:
         raise ValueError("Assistant marker not found in prompt.")
 
-    answer_start = marker_pos + len(marker_ids)
+    answer_start = marker_pos + len(assistant_marker_ids)
+    question_start = 0
+    question_end = answer_start
+    user_marker_ids = tokenizer.encode("<|start_header_id|>user<|end_header_id|>\n", add_special_tokens=False)
+    if len(user_marker_ids) > 0:
+        latest_user_pos: Optional[int] = None
+        for idx in range(max(0, marker_pos - len(user_marker_ids) + 1)):
+            if input_ids[idx : idx + len(user_marker_ids)] == user_marker_ids:
+                latest_user_pos = idx
+        if latest_user_pos is not None:
+            question_start = latest_user_pos + len(user_marker_ids)
+            question_end = marker_pos
+
     input_ids = input_ids[:max_length]
-    if answer_start > len(input_ids):
-        answer_start = len(input_ids)
+    seq_len = len(input_ids)
+    answer_start = min(answer_start, seq_len)
+    question_start = min(max(0, question_start), answer_start)
+    question_end = min(max(question_start, question_end), answer_start)
+    if question_end <= question_start:
+        question_start = 0
+        question_end = answer_start
 
     mask_token_ids = tokenizer.encode("MASK", add_special_tokens=False)
     if len(mask_token_ids) == 0:
         raise ValueError("Tokenizer cannot encode MASK token.")
+    if len(mask_token_ids) != 1:
+        raise ValueError(
+            f"MASK token must map to exactly 1 token id, but got {len(mask_token_ids)}: {mask_token_ids}."
+        )
 
-    return input_ids, answer_start, mask_token_ids[0]
+    return input_ids, answer_start, question_start, question_end, mask_token_ids[0]
+
+
+def _sample_mask_positions(
+    eligible_positions: List[int],
+    mask_ratio_min: float,
+    mask_ratio_max: float,
+    full_mask_prob: float,
+) -> List[int]:
+    min_ratio = min(mask_ratio_min, mask_ratio_max)
+    max_ratio = max(mask_ratio_min, mask_ratio_max)
+    use_full_mask = random.random() < full_mask_prob
+    if use_full_mask:
+        return eligible_positions
+
+    ratio = random.uniform(min_ratio, max_ratio)
+    num_to_mask = max(1, int(round(len(eligible_positions) * ratio)))
+    num_to_mask = min(num_to_mask, len(eligible_positions))
+    return random.sample(eligible_positions, num_to_mask)
+
+
+def _apply_lad_prompt_noising(
+    prompt_ids: List[int],
+    eligible_positions: List[int],
+    mask_token_id: int,
+    noise_prob: float,
+    full_mask_prob: float,
+) -> Tuple[List[int], List[int]]:
+    corrupted = prompt_ids.copy()
+    clipped_noise = float(_clamp(noise_prob, 0.0, 1.0))
+
+    # Keep full-mask branch to preserve compatibility with existing knobs.
+    if random.random() < full_mask_prob:
+        for pos in eligible_positions:
+            corrupted[pos] = mask_token_id
+    else:
+        # Random masking branch (aligned with LAD structurally_corrupt style).
+        if random.random() < 0.5:
+            mask_fraction = random.uniform(0.0, 0.5)
+            num_to_mask = int(len(eligible_positions) * mask_fraction)
+            if num_to_mask > 0:
+                for pos in random.sample(eligible_positions, min(num_to_mask, len(eligible_positions))):
+                    corrupted[pos] = mask_token_id
+
+        if len(eligible_positions) > 2:
+            # Local adjacent swaps across prompt-token order.
+            for idx in range(len(eligible_positions) - 1):
+                if random.random() < (clipped_noise / 4.0):
+                    left = eligible_positions[idx]
+                    right = eligible_positions[idx + 1]
+                    corrupted[left], corrupted[right] = corrupted[right], corrupted[left]
+
+            # Token duplication from neighboring prompt tokens.
+            for idx in range(len(eligible_positions)):
+                if random.random() >= (clipped_noise / 4.0):
+                    continue
+
+                tgt = eligible_positions[idx]
+                if idx > 0 and idx < len(eligible_positions) - 1:
+                    src_idx = idx - 1 if random.random() < 0.5 else idx + 1
+                elif idx > 0:
+                    src_idx = idx - 1
+                elif idx < len(eligible_positions) - 1:
+                    src_idx = idx + 1
+                else:
+                    continue
+                src = eligible_positions[src_idx]
+                corrupted[tgt] = corrupted[src]
+
+            # Span shift with bounded span length.
+            if random.random() < (clipped_noise / 4.0):
+                span_len = random.randint(1, min(3, len(eligible_positions)))
+                shift = random.randint(1, 4)
+                direction = random.choice([-1, 1])
+                start_idx = random.randint(0, len(eligible_positions) - span_len)
+                if direction < 0:
+                    target_idx = max(0, start_idx - shift)
+                else:
+                    target_idx = min(len(eligible_positions) - span_len, start_idx + shift)
+
+                source_positions = eligible_positions[start_idx : start_idx + span_len]
+                target_positions = eligible_positions[target_idx : target_idx + span_len]
+                span_values = [corrupted[pos] for pos in source_positions]
+                for pos, val in zip(target_positions, span_values):
+                    corrupted[pos] = val
+
+    changed_positions = [pos for pos in eligible_positions if corrupted[pos] != prompt_ids[pos]]
+    if len(changed_positions) == 0:
+        fallback_pos = random.choice(eligible_positions)
+        corrupted[fallback_pos] = mask_token_id
+        changed_positions = [fallback_pos]
+
+    return corrupted, changed_positions
 
 
 def _compute_prompt_ell(
@@ -245,43 +362,63 @@ def _compute_prompt_ell(
     tokenizer,
     prompt_ids: List[int],
     answer_start: int,
+    question_start: int,
+    question_end: int,
     mask_token_id: int,
     num_masks: int,
     mask_ratio_min: float,
     mask_ratio_max: float,
     full_mask_prob: float,
     require_grad: bool,
+    question_only_span: bool,
+    noising_mode: str = "mask",
 ) -> torch.Tensor:
     if num_masks <= 0:
         raise ValueError("num_masks must be positive.")
 
     special_ids = set(getattr(tokenizer, "all_special_ids", []) or [])
-    eligible_positions = [i for i in range(answer_start) if prompt_ids[i] not in special_ids]
+    if question_only_span:
+        span_start = min(max(0, question_start), answer_start)
+        span_end = min(max(span_start, question_end), answer_start)
+    else:
+        span_start = 0
+        span_end = answer_start
+
+    eligible_positions = [i for i in range(span_start, span_end) if prompt_ids[i] not in special_ids]
+    if len(eligible_positions) == 0 and question_only_span:
+        # Fallback to full prompt-side span to avoid dropping malformed records.
+        eligible_positions = [i for i in range(answer_start) if prompt_ids[i] not in special_ids]
     if len(eligible_positions) == 0:
         eligible_positions = list(range(answer_start))
     if len(eligible_positions) == 0:
         raise ValueError("No eligible prompt tokens for DPPL masking.")
 
     device = _get_input_device(model)
-    min_ratio = min(mask_ratio_min, mask_ratio_max)
-    max_ratio = max(mask_ratio_min, mask_ratio_max)
-
     losses: List[torch.Tensor] = []
     context = nullcontext() if require_grad else torch.no_grad()
     with context:
         for _ in range(num_masks):
-            use_full_mask = random.random() < full_mask_prob
-            if use_full_mask:
-                mask_positions = eligible_positions
+            if noising_mode == "mask":
+                mask_positions = _sample_mask_positions(
+                    eligible_positions=eligible_positions,
+                    mask_ratio_min=mask_ratio_min,
+                    mask_ratio_max=mask_ratio_max,
+                    full_mask_prob=full_mask_prob,
+                )
+                corrupted = prompt_ids.copy()
+                for pos in mask_positions:
+                    corrupted[pos] = mask_token_id
+            elif noising_mode == "lad_prompt":
+                noise_prob = random.uniform(min(mask_ratio_min, mask_ratio_max), max(mask_ratio_min, mask_ratio_max))
+                corrupted, mask_positions = _apply_lad_prompt_noising(
+                    prompt_ids=prompt_ids,
+                    eligible_positions=eligible_positions,
+                    mask_token_id=mask_token_id,
+                    noise_prob=noise_prob,
+                    full_mask_prob=full_mask_prob,
+                )
             else:
-                ratio = random.uniform(min_ratio, max_ratio)
-                num_to_mask = max(1, int(round(len(eligible_positions) * ratio)))
-                num_to_mask = min(num_to_mask, len(eligible_positions))
-                mask_positions = random.sample(eligible_positions, num_to_mask)
-
-            corrupted = prompt_ids.copy()
-            for pos in mask_positions:
-                corrupted[pos] = mask_token_id
+                raise ValueError(f"Unknown prompt noising mode: {noising_mode}")
 
             input_tensor = torch.tensor([corrupted], dtype=torch.long, device=device)
             logits = _forward_diffusion_logits(model, input_tensor)[0]  # [seq_len, vocab]
@@ -508,12 +645,16 @@ def _select_offline_samples(
             tokenizer=tokenizer,
             prompt_ids=record.prompt_ids,
             answer_start=record.answer_start,
+            question_start=record.question_start,
+            question_end=record.question_end,
             mask_token_id=record.mask_token_id,
             num_masks=finetuning_args.prompt_dppl_num_masks,
             mask_ratio_min=finetuning_args.prompt_dppl_mask_ratio_min,
             mask_ratio_max=finetuning_args.prompt_dppl_mask_ratio_max,
             full_mask_prob=finetuning_args.prompt_dppl_full_mask_prob,
             require_grad=False,
+            question_only_span=finetuning_args.prompt_dppl_question_only_span,
+            noising_mode=finetuning_args.prompt_dppl_score_noising,
         )
         score = float(ell.item())
         record.score_ell = score
@@ -582,12 +723,16 @@ def _train_ttl_lora(
                 tokenizer=tokenizer,
                 prompt_ids=record.prompt_ids,
                 answer_start=record.answer_start,
+                question_start=record.question_start,
+                question_end=record.question_end,
                 mask_token_id=record.mask_token_id,
                 num_masks=finetuning_args.prompt_dppl_train_num_masks,
                 mask_ratio_min=finetuning_args.prompt_dppl_mask_ratio_min,
                 mask_ratio_max=finetuning_args.prompt_dppl_mask_ratio_max,
                 full_mask_prob=finetuning_args.prompt_dppl_full_mask_prob,
                 require_grad=True,
+                question_only_span=finetuning_args.prompt_dppl_question_only_span,
+                noising_mode=finetuning_args.prompt_dppl_train_noising,
             )
 
             if finetuning_args.diffusion_use_weighting:
@@ -667,6 +812,7 @@ def _compute_mean_ell_on_records(
     num_masks: int,
     seed: int,
     desc: str,
+    noising_mode: str,
 ) -> float:
     if len(records) == 0:
         return 0.0
@@ -690,12 +836,16 @@ def _compute_mean_ell_on_records(
                 tokenizer=tokenizer,
                 prompt_ids=record.prompt_ids,
                 answer_start=record.answer_start,
+                question_start=record.question_start,
+                question_end=record.question_end,
                 mask_token_id=record.mask_token_id,
                 num_masks=num_masks,
                 mask_ratio_min=finetuning_args.prompt_dppl_mask_ratio_min,
                 mask_ratio_max=finetuning_args.prompt_dppl_mask_ratio_max,
                 full_mask_prob=finetuning_args.prompt_dppl_full_mask_prob,
                 require_grad=False,
+                question_only_span=finetuning_args.prompt_dppl_question_only_span,
+                noising_mode=noising_mode,
             )
             total += float(ell.item())
     finally:
@@ -892,6 +1042,9 @@ def run_ttl_diffusion(
     if training_args.do_train:
         _merge_and_attach_ttl_lora(model, finetuning_args)
     else:
+        if finetuning_args.merge_lad_lora and hasattr(model, "llama") and hasattr(model.llama, "merge_and_unload"):
+            model.llama = model.llama.merge_and_unload()
+            logger.info_rank0("Merged LAD LoRA into backbone (infer mode).")
         loaded = _load_ttl_lora_for_infer(model, training_args.output_dir)
         if not loaded:
             raise FileNotFoundError(
@@ -949,6 +1102,7 @@ def run_ttl_diffusion(
             num_masks=ell_eval_num_masks,
             seed=ell_eval_seed,
             desc="Mean ell(before)",
+            noising_mode=finetuning_args.prompt_dppl_score_noising,
         )
         lora_snapshot = _snapshot_trainable_lora_params(model)
 
@@ -968,6 +1122,7 @@ def run_ttl_diffusion(
             num_masks=ell_eval_num_masks,
             seed=ell_eval_seed,
             desc="Mean ell(after)",
+            noising_mode=finetuning_args.prompt_dppl_score_noising,
         )
         lora_delta_l2, lora_tracked_numel = _compute_lora_delta_l2(model=model, snapshot=lora_snapshot)
 

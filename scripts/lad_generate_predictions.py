@@ -127,9 +127,32 @@ def merge_rank_outputs(output_path: Path, world_size: int, keep_rank_outputs: bo
 def build_question(sample: dict) -> str:
     instruction = str(sample.get("instruction", "")).strip()
     user_input = str(sample.get("input", "")).strip()
-    if user_input:
-        return instruction + "\n" + user_input
-    return instruction
+    if instruction:
+        if user_input:
+            return instruction + "\n" + user_input
+        return instruction
+
+    question = str(sample.get("question", "")).strip()
+    if question:
+        return question
+
+    prompt = str(sample.get("prompt", "")).strip()
+    if prompt:
+        return prompt
+
+    return ""
+
+
+def build_label(sample: dict) -> str:
+    if "output" in sample:
+        return str(sample.get("output", ""))
+    if "answers" in sample:
+        return str(sample.get("answers", ""))
+    if "response" in sample:
+        return str(sample.get("response", ""))
+    if "label" in sample:
+        return str(sample.get("label", ""))
+    return ""
 
 
 def ensure_lad_importable(lad_repo: Path) -> None:
@@ -258,7 +281,7 @@ def main() -> None:
     with rank_output_path.open("w", encoding="utf-8") as writer:
         for idx, sample in enumerate(tqdm(samples, desc=progress_desc), start=idx_offset):
             question = build_question(sample)
-            label = str(sample.get("output", ""))
+            label = build_label(sample)
             try:
                 prediction = generate_answer(
                     question=question,

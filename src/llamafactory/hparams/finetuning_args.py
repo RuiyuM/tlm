@@ -358,6 +358,24 @@ class FinetuningArguments(FreezeArguments, LoraArguments, RLHFArguments, GaloreA
         default=1,
         metadata={"help": "Number of random masks for prompt DPPL during TTL optimization."},
     )
+    prompt_dppl_score_noising: Literal["mask", "lad_prompt"] = field(
+        default="mask",
+        metadata={
+            "help": "Noising strategy for prompt DPPL scoring (offline sample selection): `mask` or `lad_prompt`."
+        },
+    )
+    prompt_dppl_train_noising: Literal["mask", "lad_prompt"] = field(
+        default="mask",
+        metadata={
+            "help": "Noising strategy for diffusion TTL optimization: `mask` (original) or `lad_prompt` (LAD-style structural noising on prompt tokens)."
+        },
+    )
+    prompt_dppl_question_only_span: bool = field(
+        default=True,
+        metadata={
+            "help": "If true, compute prompt DPPL only on user-question token span (between user marker and assistant marker)."
+        },
+    )
     prompt_dppl_mask_ratio_min: float = field(
         default=0.0,
         metadata={"help": "Minimum masking ratio for prompt DPPL sampling."},
@@ -471,6 +489,12 @@ class FinetuningArguments(FreezeArguments, LoraArguments, RLHFArguments, GaloreA
 
         if self.prompt_dppl_num_masks <= 0 or self.prompt_dppl_train_num_masks <= 0:
             raise ValueError("Prompt DPPL mask counts must be positive.")
+
+        if self.prompt_dppl_score_noising not in ["mask", "lad_prompt"]:
+            raise ValueError("`prompt_dppl_score_noising` must be one of: mask, lad_prompt.")
+
+        if self.prompt_dppl_train_noising not in ["mask", "lad_prompt"]:
+            raise ValueError("`prompt_dppl_train_noising` must be one of: mask, lad_prompt.")
 
         if not (0.0 <= self.prompt_dppl_full_mask_prob <= 1.0):
             raise ValueError("`prompt_dppl_full_mask_prob` must be in [0, 1].")

@@ -37,14 +37,14 @@ diffusion_max_length: 256
 diffusion_model_parallel: true
 
 ### dataset
-dataset: geosignal_5k
-eval_dataset: geosignal_5k
+dataset: agriculture_5k
+eval_dataset: agriculture_5k
 dataset_dir: data
 cutoff_len: 4096
 max_samples: 5000
 
 ### output
-output_dir: saves/lad-ttl/offline_ttl/geosignal_5k/top20-lr_5e-5-seed_42
+output_dir: saves/lad-ttl/offline_ttl/agriculture_5k/top20-lr_5e-5-seed_42
 overwrite_output_dir: true
 plot_loss: false
 logging_steps: 20
